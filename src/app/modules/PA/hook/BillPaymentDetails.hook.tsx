@@ -1,0 +1,169 @@
+import { useState } from "react";
+import { BillPaymentResponseDtoServiceResponse } from "../../../api/prmApi.Client";
+import { useParams } from "react-router-dom";
+import { encodeImg } from "../../_common/helpersFunction";
+import { toPng } from "html-to-image";
+import { BillPaymentPDF } from "../../PDF/PA/BillPaymentPDF";
+
+// Bank and static images
+const STATIC_IMAGES = {
+    siamSmileLogo: "/images/BillPaymentPDF/SiamSmile/SiamSmileLogo.png",
+    ktnk: "/images/BillPaymentPDF/BankIcon/KTNK.png",
+    ttb: "/images/BillPaymentPDF/BankIcon/TTB.png",
+    kbank: "/images/BillPaymentPDF/BankIcon/KBANK.png",
+    ktb: "/images/BillPaymentPDF/BankIcon/KTB.png",
+    scb: "/images/BillPaymentPDF/BankIcon/SCB.png",
+    gsb: "/images/BillPaymentPDF/BankIcon/GSB.png",
+    bbl: "/images/BillPaymentPDF/BankIcon/BBL.png",
+    baac: "/images/BillPaymentPDF/BankIcon/BAAC.png",
+    bay: "/images/BillPaymentPDF/BankIcon/BAY.png",
+};
+
+type BillPaymentDetailsHookProps = { billPaymentData?: BillPaymentResponseDtoServiceResponse };
+
+const useBillPaymentDetailsHook = ({ billPaymentData }: BillPaymentDetailsHookProps) => {
+    const { summaryDetailCode } = useParams();
+    const [scanCodeType, setScanCodeType] = useState(1);
+    const [isPDFDownloading, setIsPDFDownloading] = useState(false);
+    const { premiumDebt, taxNo, ref1, ref2 } = billPaymentData?.data ?? {};
+
+    const handleScanCodeGeneration = () => {
+        if (!premiumDebt) return;
+
+        const splitNumber = premiumDebt.toFixed(2).toString().split(".");
+        const formattedNumber = splitNumber[0] + splitNumber[1];
+
+        const qrCodeFormat = "|" + taxNo + "\r\n" + ref1 + "\r\n" + ref2 + "\r\n" + formattedNumber;
+
+        return qrCodeFormat;
+    };
+
+    const handleScanCodeTypeChange = (type: number) => {
+        setScanCodeType(type);
+    };
+
+    const handleEncodeImg = async () => {
+        try {
+            // Encode static images
+            const encodedSiamSmileLogoImage = await encodeImg(STATIC_IMAGES.siamSmileLogo);
+            const encodedBankImages = {
+                ktnk: await encodeImg(STATIC_IMAGES.ktnk),
+                ttb: await encodeImg(STATIC_IMAGES.ttb),
+                kbank: await encodeImg(STATIC_IMAGES.kbank),
+                ktb: await encodeImg(STATIC_IMAGES.ktb),
+                scb: await encodeImg(STATIC_IMAGES.scb),
+                gsb: await encodeImg(STATIC_IMAGES.gsb),
+                bbl: await encodeImg(STATIC_IMAGES.bbl),
+                baac: await encodeImg(STATIC_IMAGES.baac),
+                bay: await encodeImg(STATIC_IMAGES.bay),
+            };
+
+            // Create temporary QR Code and Barcode elements for encoding
+            const qrCodeValue = handleScanCodeGeneration();
+
+            // Create QR Code element
+            const qrCodeContainer = document.createElement("div");
+            qrCodeContainer.innerHTML = `
+                    <canvas id="temp-qr-code" width="150" height="150"></canvas>
+                `;
+            qrCodeContainer.style.position = "absolute";
+            qrCodeContainer.style.left = "-9999px";
+            qrCodeContainer.style.top = "-9999px";
+            document.body.appendChild(qrCodeContainer);
+
+            // Generate QR Code using QRCode library
+            const QRCode = await import("qrcode");
+            const qrCanvas = qrCodeContainer.querySelector("#temp-qr-code") as HTMLCanvasElement;
+            await QRCode.toCanvas(qrCanvas, qrCodeValue as string, {
+                width: 150,
+                margin: 1,
+                color: {
+                    dark: "#00202e",
+                    light: "#ffffff",
+                },
+            });
+
+            // Create Barcode element
+            const barcodeContainer = document.createElement("div");
+            barcodeContainer.style.position = "absolute";
+            barcodeContainer.style.left = "-9999px";
+            barcodeContainer.style.top = "-9999px";
+            document.body.appendChild(barcodeContainer);
+
+            // Generate Barcode using JsBarcode
+            const JsBarcode = await import("jsbarcode");
+            const barcodeSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            JsBarcode.default(barcodeSvg, qrCodeValue as string, {
+                displayValue: true,
+                fontSize: 20,
+                margin: 0,
+            });
+            barcodeContainer.appendChild(barcodeSvg);
+
+            console.log("Temporary elements created for encoding:", {
+                qrCode: !!qrCanvas,
+                barcode: !!barcodeSvg,
+                qrCodeValue,
+            });
+
+            // Encode both QR Code and Barcode
+            const [encodedQRCode, encodedBarcode] = await Promise.all([
+                toPng(qrCanvas, {
+                    cacheBust: false,
+                    quality: 0.8,
+                    pixelRatio: 1,
+                }),
+                toPng(barcodeSvg as any, {
+                    cacheBust: false,
+                    quality: 0.8,
+                    pixelRatio: 1,
+                }),
+            ]);
+
+            // Clean up temporary elements
+            document.body.removeChild(qrCodeContainer);
+            document.body.removeChild(barcodeContainer);
+
+            return {
+                encodedSiamSmileLogoImage,
+                encodedBankImages,
+                encodedQRCode,
+                encodedBarcode,
+            };
+        } catch (error) {
+            console.error("Error encoding images:", error);
+            throw error;
+        }
+    };
+
+    const handleBillPaymentPDFDownload = async () => {
+        if (isPDFDownloading) return;
+
+        setIsPDFDownloading(true);
+
+        try {
+            const encodedData = await handleEncodeImg();
+
+            BillPaymentPDF({
+                billPaymentData,
+                encodedData,
+            });
+        } catch (error) {
+            console.error("Error generating PDF:", error);
+        } finally {
+            setIsPDFDownloading(false);
+        }
+        // Here you would typically create a PDF using the encoded images and normalized data
+    };
+
+    return {
+        summaryDetailCode,
+        scanCodeType,
+        handleScanCodeGeneration,
+        handleScanCodeTypeChange,
+        handleBillPaymentPDFDownload,
+        isPDFDownloading,
+    };
+};
+
+export default useBillPaymentDetailsHook;
